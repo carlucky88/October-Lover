@@ -94,6 +94,20 @@ Hazlo en ambos teléfonos.
   textos y comentarios, y las medallas. "Imprimir / PDF" abre la hoja de impresión (en iPhone, desde ahí se guarda como PDF).
 - **Contraseña.** Ajustes → Tu cuenta para cambiarla; "¿Olvidaste tu contraseña?" envía un enlace por correo.
 
+## Notificaciones push (Supabase Edge Function)
+
+1. **SQL Editor**: ejecuta `supabase/03-temas-y-notificaciones.sql` en una consulta nueva.
+2. **Edge Functions → Secrets**: agrega `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT`.
+   La clave pública está en `js/config.js`; la privada NUNCA va en el repositorio.
+3. **Edge Functions → Deploy a new function → Via Editor**: nombre `notify`, pega
+   `supabase/functions/notify/index.ts` y despliega. En los detalles de la función,
+   desactiva **Verify JWT** (la función valida la sesión por su cuenta).
+4. En cada iPhone, con la app instalada: Ajustes → Notificaciones → **Activar**.
+
+Se avisa a la pareja cuando alguien agrega un recuerdo, comenta un recuerdo del otro,
+pide cambiar el tema o responde esa solicitud. "Otro tema" con pareja conectada envía
+una solicitud: si la pareja la aprueba se sortea un tema nuevo; si no, se mantiene.
+
 ## Personalizar
 
 - Temas y frases de las medallas: `js/content.js`. Agrega temas nuevos **al final** de la
