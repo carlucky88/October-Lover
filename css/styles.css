@@ -42,10 +42,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 /* ───────── Estructura ───────── */
 
 .app {
+  /* fija a los bordes de la pantalla: en la app instalada de iOS, 100dvh deja un hueco bajo la barra */
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  height: 100dvh;
   max-width: 640px;
   margin: 0 auto;
 }
@@ -571,24 +572,7 @@ textarea { resize: vertical; min-height: 140px; }
 a.btn { text-decoration: none; }
 .settings-group.highlight { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
 
-/* ───────── Elegir tema ───────── */
-
-.topic {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 12px 14px;
-  margin-bottom: 8px;
-  border-radius: 12px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-}
-.topic:active { background: var(--bg-hover); }
-.topic:disabled { opacity: 0.4; }
-.topic.current { border-color: var(--primary); }
-.topic-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.topic-desc { font-size: 13px; color: var(--text-2); }
-.topic-tag { font-size: 11px; font-weight: 600; color: var(--on-primary); background: var(--primary); padding: 1px 8px; border-radius: 999px; }
+.prompt-title.drawn { animation: pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
 
 /* ───────── Reacciones y comentarios ───────── */
 
