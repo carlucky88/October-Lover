@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Octubre Juntos</title>
+  <title>October Lover</title>
   <meta name="description" content="31 días, 31 recuerdos: un reto de octubre para crear recuerdos en pareja.">
   <meta name="theme-color" content="#2A2A25">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Octubre">
+  <meta name="apple-mobile-web-app-title" content="October Lover">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -19,7 +19,7 @@
   <div class="app">
     <header class="topbar">
       <div class="topbar-title">
-        <h1>Octubre Juntos</h1>
+        <h1>October Lover</h1>
         <div class="subtitle" id="subtitle"></div>
       </div>
       <div class="topbar-actions">
@@ -91,6 +91,16 @@
       <p class="phrase-text" id="phrase-text"></p>
       <button class="btn btn-primary block" type="button" data-close>Guardar en el corazón</button>
     </div>
+  </div>
+
+  <!-- Álbum final para imprimir o guardar como PDF -->
+  <div class="book" id="book" hidden>
+    <div class="book-bar">
+      <button class="text-btn" id="book-close" type="button">Cerrar</button>
+      <div class="sheet-title">Álbum</div>
+      <button class="text-btn strong" id="book-print" type="button">Imprimir / PDF</button>
+    </div>
+    <div class="book-pages" id="book-pages"></div>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

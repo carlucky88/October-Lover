@@ -2,7 +2,7 @@ import { CONFIG } from './config.js';
 import { PROMPTS, TYPES, MEDALS, TOGETHER_MEDALS } from './content.js';
 import {
   DAYS, now, challengeState, dateForDay, firstWeekdayOffset,
-  buildSchedule, alternativePrompt, randomSeed,
+  buildSchedule, alternativePrompt, randomSeed, promptChange, usedOnPastDay,
 } from './challenge.js';
 import { db } from './db.js';
 import { cloud } from './cloud.js';
@@ -10,6 +10,9 @@ import { cloud } from './cloud.js';
 const LOCAL_AUTHOR = 'local';
 const MAX_VIDEO_SECONDS = 31;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const APP_NAME = 'October Lover';
+const QUICK_REACTIONS = ['❤️', '😍', '🥹', '😂'];
+const REMINDER_HOURS = [8, 12, 18, 20, 21, 22];
 
 const state = {
   name: '',
@@ -18,6 +21,8 @@ const state = {
   couple: null,
   members: [],
   memories: [],         // visibles (sin borrados pendientes)
+  comments: [],         // comentarios y reacciones (solo con pareja)
+  commentsUnavailable: false,
   schedule: [],
   seenMedals: [],
   tab: 'today',
@@ -25,8 +30,10 @@ const state = {
   sync: 'local',
   syncError: '',
   openDay: null,        // día abierto en la hoja de detalle
-  sheet: null,          // 'day' | 'settings'
-  auth: { email: '', busy: false },
+  sheet: null,          // 'day' | 'settings' | 'topic'
+  topicDay: null,
+  auth: { email: '', busy: false, recovery: false },
+  openComposer: null,   // id del recuerdo con el campo de comentario abierto
 };
 
 // ───────────────────────── Utilidades ─────────────────────────
@@ -103,6 +110,7 @@ async function loadLocal() {
   state.couple = (await db.get('couple')) || null;
   state.members = (await db.get('members')) || [];
   state.seenMedals = (await db.get('seenMedals')) || [];
+  state.comments = (await db.get('comments')) || [];
   rebuildSchedule();
   await refreshMemories();
 }
@@ -318,8 +326,20 @@ function render() {
   if (state.tab === 'calendar') renderCalendar();
   if (state.tab === 'medals') renderMedals();
   if (state.sheet === 'day') renderDaySheet();
+  if (state.sheet === 'topic') renderTopicSheet();
   // No recrear Ajustes mientras la persona escribe en un campo.
   if (state.sheet === 'settings' && !sheetEl().contains(document.activeElement)) renderSettings();
+}
+
+// Las actualizaciones en segundo plano (sincronización) esperan si la persona está escribiendo.
+let renderPending = false;
+function renderSafely() {
+  const active = document.activeElement;
+  if (active && active.matches('input, textarea, select') && !$('editor').contains(active)) {
+    renderPending = true;
+    return;
+  }
+  render();
 }
 
 function switchTab(tab) {
@@ -360,7 +380,8 @@ function renderToday() {
       h('p', { class: 'prompt-desc' }, `${done} de ${DAYS} días con recuerdo · ${plural(state.memories.length, 'recuerdo', 'recuerdos')} · ${plural(medals, 'medalla', 'medallas')}.`),
       monthProgress(DAYS + 1),
       h('div', { class: 'btn-row single' },
-        h('button', { class: 'btn btn-primary', onclick: () => { state.calendarMode = 'album'; switchTab('calendar'); } }, 'Ver nuestro álbum')),
+        h('button', { class: 'btn btn-primary', onclick: openBook }, '📖 Álbum para imprimir'),
+        h('button', { class: 'btn btn-secondary', onclick: () => { state.calendarMode = 'album'; switchTab('calendar'); } }, 'Ver todos los recuerdos')),
     ));
     return;
   }
@@ -389,7 +410,7 @@ function renderToday() {
     who,
     h('div', { class: `btn-row${mems.length ? ' single' : ''}` },
       h('button', { class: 'btn btn-primary', onclick: () => openEditor(day) }, mineDone ? 'Agregar otro recuerdo' : 'Agregar recuerdo'),
-      !mems.length && h('button', { class: 'btn btn-secondary', onclick: () => swapPrompt(day) }, 'Otro tema'),
+      !mems.length && h('button', { class: 'btn btn-secondary', onclick: () => openTopicPicker(day) }, 'Cambiar tema'),
     ),
     monthProgress(day),
   ));
@@ -452,19 +473,69 @@ function typeChip(type) {
   return h('span', { class: 'chip' }, TYPES[type].emoji, ' ', TYPES[type].label);
 }
 
-async function swapPrompt(day) {
-  const index = alternativePrompt(state.schedule, day);
+async function applyPromptPatch(patch) {
+  if (!Object.keys(patch).length) return;
   if (state.couple) {
-    state.couple.prompt_overrides = { ...(state.couple.prompt_overrides || {}), [day]: index };
+    state.couple.prompt_overrides = { ...(state.couple.prompt_overrides || {}), ...patch };
     await db.set('couple', state.couple);
     await db.set('overridesDirty', true);
     syncSoon();
   } else {
-    state.overrides = { ...state.overrides, [day]: index };
+    state.overrides = { ...state.overrides, ...patch };
     await db.set('overrides', state.overrides);
   }
   rebuildSchedule();
   render();
+}
+
+// ───────────────────────── Hoja: elegir tema ─────────────────────────
+
+function openTopicPicker(day) {
+  state.topicDay = day;
+  openSheet('topic');
+  renderTopicSheet();
+}
+
+async function chooseTopic(index) {
+  const day = state.topicDay;
+  const patch = index == null
+    ? { [day]: alternativePrompt(state.schedule, day) }
+    : promptChange(state.schedule, day, index, challengeState().today);
+  if (!patch) { toast('Ese tema ya se usó en un día anterior'); return; }
+  closeSheet();
+  await applyPromptPatch(patch);
+  toast(`Tema de hoy: ${PROMPTS[state.schedule[day]].title}`);
+}
+
+function renderTopicSheet() {
+  const day = state.topicDay;
+  const { today } = challengeState();
+  const current = state.schedule[day];
+  const content = [
+    h('div', { class: 'sheet-head' },
+      h('div', { style: 'width:60px' }),
+      h('div', { class: 'sheet-title' }, 'Elegir tema'),
+      h('button', { class: 'text-btn', type: 'button', onclick: closeSheet }, 'Cerrar')),
+    h('button', { class: 'btn btn-secondary block', type: 'button', onclick: () => chooseTopic(null) }, '🎲 Sorpréndeme'),
+    h('p', { class: 'small muted', style: 'margin:10px 2px 4px' },
+      'Si eliges un tema de otro tipo, se acomoda otro día del mes para que las medallas sigan siendo alcanzables.'),
+  ];
+  for (const type of Object.keys(TYPES)) {
+    content.push(h('div', { class: 'section-title' }, `${TYPES[type].emoji} ${TYPES[type].plural}`));
+    PROMPTS.forEach((p, i) => {
+      if (p.type !== type) return;
+      const usedDay = usedOnPastDay(state.schedule, i, day, today);
+      content.push(h('button', {
+        class: `topic${i === current ? ' current' : ''}`,
+        type: 'button',
+        disabled: Boolean(usedDay),
+        onclick: () => (i === current ? closeSheet() : chooseTopic(i)),
+      },
+      h('div', { class: 'topic-title' }, p.title, i === current && h('span', { class: 'topic-tag' }, 'Hoy')),
+      h('div', { class: 'topic-desc' }, usedDay ? `Ya fue el tema del día ${usedDay}` : p.description)));
+    });
+  }
+  sheetEl().replaceChildren(...content);
 }
 
 // ───────────────────────── Tarjeta de recuerdo ─────────────────────────
@@ -494,7 +565,115 @@ function postCard(m, { showDay = false } = {}) {
       m.title && m.title !== prompt.title && h('div', { class: 'post-title' }, m.title),
       text, text && more,
       h('div', { class: 'post-foot' }, typeChip(prompt.type))),
+    paired() && !state.commentsUnavailable && conversation(m),
   );
+}
+
+// ───────────────────────── Reacciones y comentarios ─────────────────────────
+
+const commentsFor = memoryId => state.comments
+  .filter(c => c.memory_id === memoryId && !c.deleted)
+  .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+function commenterName(c) {
+  return state.members.find(x => x.user_id === c.author_id)?.display_name || c.author_name || 'Tu pareja';
+}
+
+function conversation(m) {
+  const items = commentsFor(m.id);
+  const reactions = items.filter(c => c.kind === 'reaction');
+  const comments = items.filter(c => c.kind === 'comment');
+
+  const bar = h('div', { class: 'reactions' }, QUICK_REACTIONS.map(emoji => {
+    const who = reactions.filter(r => r.body === emoji);
+    const mine = who.some(r => r.author_id === cloud.userId);
+    return h('button', {
+      class: `reaction${mine ? ' mine' : ''}`,
+      type: 'button',
+      title: who.map(commenterName).join(', '),
+      'aria-pressed': mine ? 'true' : 'false',
+      onclick: () => toggleReaction(m, emoji),
+    }, emoji, who.length > 0 && h('span', {}, who.length));
+  }),
+  h('button', {
+    class: 'reaction comment-btn', type: 'button',
+    onclick: () => { state.openComposer = state.openComposer === m.id ? null : m.id; render(); },
+  }, '💬', comments.length > 0 && h('span', {}, comments.length)));
+
+  const list = comments.map(c => h('div', { class: 'comment' },
+    h('span', { class: 'comment-author' }, commenterName(c)), ' ', c.body,
+    c.author_id === cloud.userId && h('button', {
+      class: 'comment-del', type: 'button', 'aria-label': 'Borrar comentario',
+      onclick: () => removeComment(c),
+    }, '✕')));
+
+  let composer = null;
+  if (state.openComposer === m.id) {
+    const input = h('input', { type: 'text', placeholder: 'Escribe un comentario…', maxlength: 500, enterkeyhint: 'send' });
+    const send = () => addComment(m, input);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+    composer = h('div', { class: 'composer' }, input, h('button', { class: 'btn btn-primary', type: 'button', onclick: send }, 'Enviar'));
+    setTimeout(() => input.focus(), 50);
+  }
+
+  return h('div', { class: 'conversation' }, bar, list, composer);
+}
+
+function commentRow(m, kind, body) {
+  return {
+    id: uuid(),
+    memory_id: m.id,
+    couple_id: state.couple.id,
+    author_id: cloud.userId,
+    author_name: myName(),
+    kind,
+    body,
+    deleted: false,
+    created_at: new Date().toISOString(),
+  };
+}
+
+async function saveComment(row) {
+  if (!navigator.onLine) { toast('Necesitas conexión para comentar'); return false; }
+  try {
+    await cloud.upsertComment(row);
+  } catch (err) {
+    toast(/memory_comments/.test(err.message) ? 'Falta activar los comentarios en Supabase (ver README).' : err.message);
+    return false;
+  }
+  state.comments = [...state.comments.filter(c => c.id !== row.id), { ...row, updated_at: new Date().toISOString() }];
+  await db.set('comments', state.comments);
+  return true;
+}
+
+async function toggleReaction(m, emoji) {
+  const existing = commentsFor(m.id).find(c => c.kind === 'reaction' && c.body === emoji && c.author_id === cloud.userId);
+  const row = existing ? { ...existing, deleted: true } : commentRow(m, 'reaction', emoji);
+  delete row.updated_at;
+  if (await saveComment(row)) {
+    if (!existing) navigator.vibrate?.(20);
+    render();
+  }
+}
+
+async function addComment(m, input) {
+  const body = input.value.trim();
+  if (!body) return;
+  input.disabled = true;
+  const ok = await saveComment(commentRow(m, 'comment', body));
+  input.disabled = false;
+  if (ok) {
+    input.blur();
+    state.openComposer = null;
+    render();
+  }
+}
+
+async function removeComment(c) {
+  if (!confirm('¿Borrar este comentario?')) return;
+  const row = { ...c, deleted: true };
+  delete row.updated_at;
+  if (await saveComment(row)) render();
 }
 
 // ───────────────────────── Calendario ─────────────────────────
@@ -567,7 +746,124 @@ function album() {
       h('p', {}, 'Cada recuerdo que agreguen aparecerá aquí, del más reciente al primero.'))];
   }
   const sorted = state.memories.slice().sort((a, b) => b.day - a.day || b.createdAt.localeCompare(a.createdAt));
-  return sorted.map(m => postCard(m, { showDay: true }));
+  return [
+    h('button', { class: 'book-cta', type: 'button', onclick: openBook },
+      h('span', { class: 'book-cta-icon' }, '📖'),
+      h('span', { style: 'flex:1' }, h('strong', {}, 'Álbum para imprimir'), h('br'),
+        h('span', { class: 'small muted' }, 'Su mes completo, listo para PDF o regalo')),
+      h('span', { class: 'step-arrow' }, '›')),
+    ...sorted.map(m => postCard(m, { showDay: true })),
+  ];
+}
+
+// ───────────────────────── Álbum final (imprimible) ─────────────────────────
+
+let bookToken = 0;
+
+async function openBook() {
+  const token = ++bookToken;
+  $('book').hidden = false;
+  document.body.classList.add('book-open');
+  $('book').scrollTop = 0;
+  const pages = $('book-pages');
+  pages.replaceChildren(h('div', { class: 'book-loading' }, 'Preparando su álbum…'));
+
+  const names = (paired() ? state.members.map(m => m.display_name) : [myName()]).filter(Boolean);
+  const medals = medalList().filter(m => m.unlocked);
+  const days = [...new Set(state.memories.map(m => m.day))].sort((a, b) => a - b);
+
+  const content = [h('section', { class: 'book-cover' },
+    h('div', { class: 'book-cover-mark' }, '♥'),
+    h('h1', {}, APP_NAME),
+    names.length > 0 && h('div', { class: 'book-names' }, names.join(' & ')),
+    h('div', { class: 'book-sub' }, `Nuestro octubre ${CONFIG.year}`),
+    h('div', { class: 'book-stats' },
+      `${days.length} de ${DAYS} días · ${plural(state.memories.length, 'recuerdo', 'recuerdos')} · ${plural(medals.length, 'medalla', 'medallas')}`))];
+
+  if (!days.length) {
+    content.push(h('p', { class: 'book-empty' }, 'Aún no hay recuerdos. El álbum se irá llenando con cada día de octubre.'));
+  }
+
+  for (const d of days) {
+    const mems = memoriesForDay(d);
+    const prompt = promptOf(mems[0]);
+    const blocks = await Promise.all(mems.map(bookMemory));
+    if (token !== bookToken) return;
+    content.push(h('section', { class: 'book-day' },
+      h('div', { class: 'book-day-head' },
+        h('span', { class: 'book-day-num' }, `Día ${d}`),
+        h('span', { class: 'book-day-date' }, fmtDay(d))),
+      h('h2', {}, prompt.title),
+      h('div', { class: 'book-day-type' }, `${TYPES[prompt.type].emoji} ${TYPES[prompt.type].label}`),
+      ...blocks));
+  }
+
+  if (medals.length) {
+    content.push(h('section', { class: 'book-medals' },
+      h('h2', {}, 'Medallas que ganamos'),
+      ...medals.map(m => h('div', { class: 'book-medal' },
+        h('div', { class: 'book-medal-icon' }, m.icon),
+        h('div', {}, h('strong', {}, m.name), h('p', {}, m.phrase))))));
+  }
+  content.push(h('div', { class: 'book-end' }, '♥'));
+  if (token === bookToken) pages.replaceChildren(...content);
+}
+
+async function bookMemory(m) {
+  const items = commentsFor(m.id);
+  const reactions = QUICK_REACTIONS
+    .map(e => [e, items.filter(c => c.kind === 'reaction' && c.body === e).length])
+    .filter(([, n]) => n > 0)
+    .map(([e, n]) => (n > 1 ? `${e} ${n}` : e)).join('  ');
+  return h('article', { class: 'book-memory' },
+    h('div', { class: 'book-author' }, authorName(m)),
+    await bookMedia(m),
+    m.title && m.title !== promptOf(m).title && h('h3', {}, m.title),
+    m.content && h('p', { class: 'book-text' }, m.content),
+    reactions && h('div', { class: 'book-reactions' }, reactions),
+    ...items.filter(c => c.kind === 'comment').map(c => h('p', { class: 'book-comment' },
+      h('strong', {}, commenterName(c)), ' ', c.body)));
+}
+
+async function bookMedia(m) {
+  const url = await mediaUrl(m);
+  if (!url) return null;
+  if (m.mediaType !== 'video') {
+    const img = h('img', { class: 'book-photo', src: url, alt: '' });
+    await img.decode?.().catch(() => {});
+    return img;
+  }
+  const frame = await videoFrame(url).catch(() => null);
+  return h('div', { class: 'book-video' },
+    frame && h('img', { class: 'book-photo', src: frame, alt: '' }),
+    h('span', {}, '▶︎ Video'));
+}
+
+function videoFrame(url) {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video');
+    const timer = setTimeout(() => reject(new Error('timeout')), 8000);
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = 'auto';
+    v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); };
+    v.onseeked = () => {
+      clearTimeout(timer);
+      const c = document.createElement('canvas');
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      c.getContext('2d').drawImage(v, 0, 0);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    v.onerror = () => { clearTimeout(timer); reject(new Error('video')); };
+    v.src = url;
+  });
+}
+
+function closeBook() {
+  bookToken++;
+  $('book').hidden = true;
+  document.body.classList.remove('book-open');
 }
 
 // ───────────────────────── Logros ─────────────────────────
@@ -837,7 +1133,10 @@ function renderSettings() {
     h('div', { class: 'inline' }, nameInput,
       h('button', { class: 'btn btn-secondary', type: 'button', onclick: () => saveName(nameInput.value) }, 'Guardar'))));
 
+  if (state.auth.recovery && cloud.userId) groups.push(recoverySettings());
   groups.push(syncSettings());
+  if (cloud.userId && !state.auth.recovery) groups.push(accountSettings());
+  groups.push(reminderSettings());
 
   // Respaldo
   const importInput = h('input', { type: 'file', accept: 'application/json,.json', hidden: true, onchange: e => importBackup(e.target.files[0]) });
@@ -876,7 +1175,8 @@ function syncSettings() {
       password,
       h('div', { style: 'height:10px' }),
       h('button', { class: 'btn btn-primary block', type: 'button', disabled: busy, onclick: () => signIn(email.value, password.value) }, busy ? 'Un momento…' : 'Entrar'),
-      h('button', { class: 'btn btn-secondary block', type: 'button', disabled: busy, onclick: () => signUp(email.value, password.value) }, 'Crear cuenta'));
+      h('button', { class: 'btn btn-secondary block', type: 'button', disabled: busy, onclick: () => signUp(email.value, password.value) }, 'Crear cuenta'),
+      h('button', { class: 'text-btn', type: 'button', style: 'display:block;margin:10px auto 0;font-size:14px', disabled: busy, onclick: () => forgotPassword(email.value) }, '¿Olvidaste tu contraseña?'));
     return group;
   }
 
@@ -899,7 +1199,7 @@ function syncSettings() {
     !complete && h('div', { class: 'invite-code' }, state.couple.invite_code),
     !complete && navigator.share && h('button', {
       class: 'btn btn-secondary block', type: 'button',
-      onclick: () => navigator.share({ text: `Únete a nuestro Octubre Juntos con el código ${state.couple.invite_code}` }).catch(() => {}),
+      onclick: () => navigator.share({ text: `Únete a nuestro October Lover con el código ${state.couple.invite_code}` }).catch(() => {}),
     }, 'Compartir código'),
     ...state.members.map(m => h('div', { class: 'member-row' },
       avatarFor(m.user_id, m.display_name), m.display_name || 'Sin nombre', m.user_id === cloud.userId && h('span', { class: 'small muted' }, '(tú)'))),
@@ -909,6 +1209,76 @@ function syncSettings() {
     h('button', { class: 'btn btn-danger block', type: 'button', onclick: signOut }, 'Cerrar sesión'));
   return group;
 }
+
+function passwordFields(placeholder) {
+  const a = h('input', { type: 'password', placeholder, autocomplete: 'new-password', minlength: 6 });
+  const b = h('input', { type: 'password', placeholder: 'Repite la contraseña', autocomplete: 'new-password', minlength: 6 });
+  const read = () => {
+    if (a.value.length < 6) { toast('La contraseña debe tener al menos 6 caracteres'); return null; }
+    if (a.value !== b.value) { toast('Las contraseñas no coinciden'); return null; }
+    return a.value;
+  };
+  return { nodes: [a, h('div', { style: 'height:8px' }), b, h('div', { style: 'height:10px' })], read };
+}
+
+function recoverySettings() {
+  const fields = passwordFields('Contraseña nueva');
+  return h('div', { class: 'settings-group highlight' },
+    h('h3', {}, 'Crea tu contraseña nueva'),
+    h('p', {}, 'Abriste el enlace de recuperación. Escribe una contraseña nueva para tu cuenta.'),
+    ...fields.nodes,
+    h('button', { class: 'btn btn-primary block', type: 'button', disabled: state.auth.busy, onclick: () => changePassword(fields.read()) }, 'Guardar contraseña'));
+}
+
+function accountSettings() {
+  const fields = passwordFields('Contraseña nueva');
+  return h('div', { class: 'settings-group' },
+    h('h3', {}, 'Tu cuenta'),
+    h('p', {}, `Entras como ${cloud.email}. Aquí puedes cambiar tu contraseña.`),
+    ...fields.nodes,
+    h('button', { class: 'btn btn-secondary block', type: 'button', disabled: state.auth.busy, onclick: () => changePassword(fields.read()) }, 'Cambiar contraseña'));
+}
+
+function changePassword(password) {
+  if (!password) return;
+  return withBusy(async () => {
+    await cloud.updatePassword(password);
+    const wasRecovery = state.auth.recovery;
+    state.auth.recovery = false;
+    toast(wasRecovery
+      ? 'Contraseña guardada. Si tienes la app instalada, entra ahí con tu contraseña nueva.'
+      : 'Contraseña cambiada');
+  });
+}
+
+function forgotPassword(email) {
+  email = email.trim().toLowerCase();
+  state.auth.email = email;
+  if (!/^\S+@\S+\.\S+$/.test(email)) { toast('Escribe tu correo arriba y vuelve a tocar “¿Olvidaste tu contraseña?”'); return; }
+  return withBusy(async () => {
+    await cloud.sendPasswordReset(email);
+    toast('Te enviamos un correo con un enlace para crear una contraseña nueva.');
+  });
+}
+
+function reminderSettings() {
+  let saved = 20;
+  try { saved = +localStorage.getItem('reminderHour') || 20; } catch { /* sin almacenamiento */ }
+  const select = h('select', { class: 'select', 'aria-label': 'Hora del recordatorio' },
+    REMINDER_HOURS.map(hh => h('option', { value: hh, selected: hh === saved }, `${hh}:00 ${hh < 12 ? 'a. m.' : 'p. m.'}`.replace(/^(\d+)/, n => (n > 12 ? n - 12 : n)))));
+  const link = h('a', { class: 'btn btn-secondary', href: reminderUrl(saved), target: '_blank', rel: 'noopener' }, 'Agregar');
+  select.addEventListener('change', () => {
+    link.href = reminderUrl(+select.value);
+    try { localStorage.setItem('reminderHour', select.value); } catch { /* sin almacenamiento */ }
+  });
+  return h('div', { class: 'settings-group' },
+    h('h3', {}, 'Recordatorio diario'),
+    h('p', {}, 'Agrega un aviso diario a tu Calendario del iPhone, del 1 al 31 de octubre. Te avisa aunque la app esté cerrada.'),
+    h('div', { class: 'inline' }, select, link),
+    h('p', { class: 'small', style: 'margin:10px 0 0' }, 'Al abrirlo, toca “Agregar todo”. Para quitarlo, borra el evento “October Lover” en tu Calendario.'));
+}
+
+const reminderUrl = hh => `recordatorios/recordatorio-${String(hh).padStart(2, '0')}.ics`;
 
 async function saveName(value) {
   const name = value.trim();
@@ -1000,6 +1370,9 @@ async function adoptCloudCouple({ carryOverrides = false } = {}) {
   if (state.couple.id !== (await db.get('coupleId'))) {
     await db.set('coupleId', state.couple.id);
     await db.del('lastPull');
+    await db.del('lastCommentPull');
+    state.comments = [];
+    await db.set('comments', []);
   }
   rebuildSchedule();
   cloud.subscribe(state.couple.id, syncSoon);
@@ -1050,7 +1423,7 @@ async function exportBackup() {
   }
   const data = { app: 'octubre-juntos', version: 1, exportedAt: new Date().toISOString(), year: CONFIG.year, name: state.name, seed: state.seed, overrides: state.overrides, memories };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-  const a = h('a', { href: URL.createObjectURL(blob), download: `octubre-juntos-${new Date().toISOString().slice(0, 10)}.json` });
+  const a = h('a', { href: URL.createObjectURL(blob), download: `october-lover-${new Date().toISOString().slice(0, 10)}.json` });
   document.body.append(a);
   a.click();
   a.remove();
@@ -1061,7 +1434,7 @@ async function importBackup(file) {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (data.app !== 'octubre-juntos' || !Array.isArray(data.memories)) throw new Error('El archivo no es un respaldo de Octubre Juntos.');
+    if (data.app !== 'octubre-juntos' || !Array.isArray(data.memories)) throw new Error('El archivo no es un respaldo de October Lover.');
     let added = 0;
     for (const { media, ...m } of data.memories) {
       if (await db.getMemory(m.id)) continue;
@@ -1130,7 +1503,7 @@ async function syncNow() {
     }
     await refreshMemories();
     rebuildSchedule();
-    render();
+    renderSafely();
     await checkNewMedals();
   })();
 
@@ -1246,6 +1619,7 @@ async function pullChanges() {
     });
   }
   await db.set('lastPull', latest);
+  await pullComments();
 
   const info = await cloud.myCouple();
   if (info) {
@@ -1254,6 +1628,27 @@ async function pullChanges() {
     state.members = info.members;
     await db.set('couple', state.couple);
     await db.set('members', state.members);
+  }
+}
+
+// Los comentarios no detienen la sincronización si aún no se creó su tabla en Supabase.
+async function pullComments() {
+  try {
+    const since = (await db.get('lastCommentPull')) || '1970-01-01T00:00:00Z';
+    const rows = await cloud.pullComments(state.couple.id, new Date(Date.parse(since) - 60000).toISOString());
+    let latest = since;
+    const byId = new Map(state.comments.map(c => [c.id, c]));
+    for (const r of rows) {
+      if (Date.parse(r.updated_at) > Date.parse(latest)) latest = r.updated_at;
+      byId.set(r.id, r);
+    }
+    state.comments = [...byId.values()];
+    state.commentsUnavailable = false;
+    await db.set('comments', state.comments);
+    await db.set('lastCommentPull', latest);
+  } catch (err) {
+    console.warn('Comentarios', err);
+    state.commentsUnavailable = /memory_comments|does not exist|schema cache/i.test(err.message || '');
   }
 }
 
@@ -1275,6 +1670,8 @@ function bindEvents() {
     editor.removeMedia = false;
     renderMediaPicker();
   });
+  $('book-close').addEventListener('click', closeBook);
+  $('book-print').addEventListener('click', () => window.print());
   $('phrase').addEventListener('click', e => {
     if (e.target === $('phrase') || e.target.closest('[data-close]')) {
       $('phrase').hidden = true;
@@ -1285,13 +1682,20 @@ function bindEvents() {
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
     if (!$('phrase').hidden) $('phrase').hidden = true;
+    else if (!$('book').hidden) closeBook();
     else if (!$('editor').hidden) closeEditor();
     else if (!$('sheet').hidden) closeSheet();
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') { render(); syncSoon(); }
+    if (document.visibilityState === 'visible') { renderSafely(); syncSoon(); }
   });
+  document.addEventListener('focusout', () => setTimeout(() => {
+    if (renderPending && !document.activeElement?.matches('input, textarea, select')) {
+      renderPending = false;
+      render();
+    }
+  }, 50));
   window.addEventListener('online', syncSoon);
   window.addEventListener('offline', () => { updateSyncState(); renderHeader(); });
   setInterval(() => { if (document.visibilityState === 'visible') syncSoon(); }, 120000);
@@ -1309,6 +1713,12 @@ async function start() {
       await cloud.init(event => {
         if (event === 'SIGNED_OUT') { state.couple = null; updateSyncState(); render(); }
       });
+      if (cloud.urlAuth === 'recovery' && cloud.userId) {
+        state.auth.recovery = true;
+        openSettings();
+      } else if (cloud.urlAuth === 'expired') {
+        toast('El enlace ya expiró o se usó. Pide uno nuevo en Ajustes → “¿Olvidaste tu contraseña?”.');
+      }
       if (cloud.userId) {
         if (state.couple) {
           cloud.subscribe(state.couple.id, syncSoon);

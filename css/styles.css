@@ -1,4 +1,4 @@
-/* Octubre Juntos — verde olivo sobre neutros cálidos (tema oscuro) */
+/* October Lover — verde olivo sobre neutros cálidos (tema oscuro) */
 
 :root {
   --primary: #A4AC86;
@@ -451,7 +451,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .field { display: block; margin-bottom: 14px; }
 .field > span { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 6px; }
-input[type="text"], input[type="email"], input[type="tel"], textarea {
+input[type="text"], input[type="email"], input[type="tel"], input[type="password"], textarea, .select {
   width: 100%;
   padding: 12px 14px;
   background: var(--bg-card);
@@ -513,7 +513,7 @@ textarea { resize: vertical; min-height: 140px; }
 }
 .member-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 15px; }
 .inline { display: flex; gap: 8px; }
-.inline input { flex: 1; }
+.inline input, .inline select { flex: 1; min-width: 0; }
 .inline .btn { flex-shrink: 0; }
 .divider { text-align: center; font-size: 12px; color: var(--text-3); margin: 14px 0; }
 
@@ -556,6 +556,146 @@ textarea { resize: vertical; min-height: 140px; }
   z-index: 200;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ───────── Selector de select ───────── */
+
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-2) 50%), linear-gradient(135deg, var(--text-2) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 50%, calc(100% - 14px) 50%;
+  background-size: 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+a.btn { text-decoration: none; }
+.settings-group.highlight { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+
+/* ───────── Elegir tema ───────── */
+
+.topic {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+.topic:active { background: var(--bg-hover); }
+.topic:disabled { opacity: 0.4; }
+.topic.current { border-color: var(--primary); }
+.topic-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.topic-desc { font-size: 13px; color: var(--text-2); }
+.topic-tag { font-size: 11px; font-weight: 600; color: var(--on-primary); background: var(--primary); padding: 1px 8px; border-radius: 999px; }
+
+/* ───────── Reacciones y comentarios ───────── */
+
+.conversation { border-top: 1px solid var(--border); padding: 10px 14px 12px; }
+.reactions { display: flex; flex-wrap: wrap; gap: 6px; }
+.reaction {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-width: 44px; height: 34px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  font-size: 17px;
+}
+.reaction span { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.reaction.mine { border-color: var(--primary); background: var(--primary-soft); }
+.reaction.mine span { color: var(--primary); }
+.reaction:active { transform: scale(0.94); }
+.comment { position: relative; font-size: 14px; line-height: 1.45; margin-top: 8px; padding-right: 28px; word-break: break-word; }
+.comment-author { font-weight: 600; }
+.comment-del { position: absolute; right: 0; top: -3px; width: 26px; height: 26px; color: var(--text-3); font-size: 12px; }
+.composer { display: flex; gap: 8px; margin-top: 10px; }
+.composer input { flex: 1; min-width: 0; }
+.composer .btn { min-height: 46px; }
+
+/* ───────── Álbum final ───────── */
+
+.book-cta {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--bg-card), var(--primary-soft));
+  border: 1px solid var(--primary);
+  font-size: 15px;
+}
+.book-cta-icon { font-size: 28px; }
+
+.book {
+  position: fixed; inset: 0;
+  z-index: 150;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #F4F1E8;
+  color: #2A2A25;
+}
+.book-bar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  background: var(--bg);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.book-pages {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+  padding-bottom: max(60px, env(safe-area-inset-bottom));
+  font-family: Georgia, 'Times New Roman', serif;
+}
+.book-loading, .book-empty { text-align: center; padding: 60px 0; color: #6B6B60; font-family: -apple-system, sans-serif; }
+.book-cover { text-align: center; padding: 70px 0 60px; border-bottom: 1px solid #D8D2C0; margin-bottom: 30px; }
+.book-cover-mark { font-size: 44px; color: #8B9D56; }
+.book-cover h1 { font-size: 44px; font-weight: 400; letter-spacing: -0.5px; margin: 6px 0 10px; }
+.book-names { font-size: 22px; font-style: italic; color: #4A4A42; }
+.book-sub { font-size: 15px; text-transform: uppercase; letter-spacing: 3px; color: #6B7F42; margin-top: 18px; font-family: -apple-system, sans-serif; }
+.book-stats { font-size: 13px; color: #8A8A82; margin-top: 8px; font-family: -apple-system, sans-serif; }
+
+.book-day { padding: 26px 0; border-bottom: 1px solid #D8D2C0; }
+.book-day-head { display: flex; justify-content: space-between; align-items: baseline; font-family: -apple-system, sans-serif; }
+.book-day-num { font-size: 13px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: #6B7F42; }
+.book-day-date { font-size: 13px; color: #8A8A82; }
+.book-day h2 { font-size: 28px; font-weight: 400; margin: 6px 0 2px; }
+.book-day-type { font-size: 13px; color: #8A8A82; margin-bottom: 16px; font-family: -apple-system, sans-serif; }
+.book-memory { margin-top: 18px; }
+.book-author { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #9C7A54; margin-bottom: 8px; font-family: -apple-system, sans-serif; }
+.book-photo { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: 4px; background: #E6E1D3; }
+.book-video { position: relative; }
+.book-video span { display: inline-block; margin-top: 6px; font-size: 13px; color: #8A8A82; font-family: -apple-system, sans-serif; }
+.book-memory h3 { font-size: 20px; font-weight: 400; font-style: italic; margin-top: 12px; }
+.book-text { font-size: 17px; line-height: 1.6; margin-top: 10px; white-space: pre-wrap; }
+.book-reactions { margin-top: 8px; font-size: 16px; }
+.book-comment { font-size: 14px; color: #4A4A42; margin-top: 6px; font-style: italic; }
+.book-comment strong { font-style: normal; }
+.book-medals { padding: 30px 0; }
+.book-medals h2 { font-size: 28px; font-weight: 400; margin-bottom: 14px; }
+.book-medal { display: flex; gap: 14px; margin-bottom: 14px; }
+.book-medal-icon { font-size: 30px; }
+.book-medal p { font-size: 15px; font-style: italic; color: #4A4A42; }
+.book-end { text-align: center; font-size: 28px; color: #8B9D56; padding: 20px 0; }
+
+@media print {
+  @page { margin: 14mm; }
+  html, body { height: auto !important; background: #fff !important; overflow: visible !important; }
+  body.book-open .app, body.book-open .overlay, body.book-open .toast { display: none !important; }
+  .book { position: static; overflow: visible; background: #fff; }
+  .book-bar { display: none; }
+  .book-pages { padding: 0; max-width: none; }
+  .book-cover { min-height: 85vh; display: flex; flex-direction: column; justify-content: center; border: none; break-after: page; }
+  .book-memory, .book-medal { break-inside: avoid; }
+  .book-day-head, .book-day h2 { break-after: avoid; }
+  .book-photo { max-height: 150mm; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

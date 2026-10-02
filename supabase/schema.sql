@@ -1,8 +1,18 @@
--- Octubre Juntos — esquema de Supabase
+-- October Lover — esquema de Supabase
 -- Pégalo completo en Supabase → SQL Editor → New query → Run.
 -- Es idempotente: puedes volver a ejecutarlo sin perder datos.
 
 -- ───────────── Tablas ─────────────
+
+-- Si existe una tabla memories de un intento anterior (sin couple_id), se reemplaza.
+-- No toca una tabla memories que ya tenga el formato de este esquema.
+do $$
+begin
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'memories')
+     and not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'memories' and column_name = 'couple_id') then
+    drop table public.memories cascade;
+  end if;
+end $$;
 
 create table if not exists public.couples (
   id               uuid primary key default gen_random_uuid(),
@@ -194,3 +204,45 @@ drop policy if exists "media: borrar lo mío" on storage.objects;
 create policy "media: borrar lo mío" on storage.objects
   for delete to authenticated
   using (bucket_id = 'media' and owner_id = auth.uid()::text);
+
+-- ───────────── Comentarios y reacciones ─────────────
+
+create table if not exists public.memory_comments (
+  id          uuid primary key,
+  memory_id   uuid not null references public.memories(id) on delete cascade,
+  couple_id   uuid not null references public.couples(id) on delete cascade,
+  author_id   uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  author_name text not null default '',
+  kind        text not null check (kind in ('reaction', 'comment')),
+  body        text not null check (char_length(body) between 1 and 500),
+  deleted     boolean not null default false,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists memory_comments_couple_updated on public.memory_comments(couple_id, updated_at);
+
+drop trigger if exists memory_comments_touch on public.memory_comments;
+create trigger memory_comments_touch before insert or update on public.memory_comments
+  for each row execute function public.touch_updated_at();
+
+alter table public.memory_comments enable row level security;
+
+drop policy if exists "comments: ver los de mi pareja" on public.memory_comments;
+create policy "comments: ver los de mi pareja" on public.memory_comments
+  for select to authenticated using (public.is_member(couple_id));
+
+drop policy if exists "comments: crear los míos" on public.memory_comments;
+create policy "comments: crear los míos" on public.memory_comments
+  for insert to authenticated with check (public.is_member(couple_id) and author_id = auth.uid());
+
+drop policy if exists "comments: editar los míos" on public.memory_comments;
+create policy "comments: editar los míos" on public.memory_comments
+  for update to authenticated
+  using (author_id = auth.uid())
+  with check (author_id = auth.uid() and public.is_member(couple_id));
+
+do $$
+begin
+  alter publication supabase_realtime add table public.memory_comments;
+exception when duplicate_object then null;
+end $$;

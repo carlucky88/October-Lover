@@ -1,0 +1,21 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//October Lover//Recordatorio//ES
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:october-lover-recordatorio-21@carlucky88.github.io
+DTSTAMP:20261001T000000Z
+DTSTART:20261001T210000
+DTEND:20261001T211500
+RRULE:FREQ=DAILY;COUNT=31
+SUMMARY:October Lover 💚
+DESCRIPTION:Hoy hay un tema nuevo. Agreguen su recuerdo del día.
+URL:https://carlucky88.github.io/October-Lover/
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:October Lover: agreguen su recuerdo de hoy
+TRIGGER:PT0S
+END:VALARM
+END:VEVENT
+END:VCALENDAR

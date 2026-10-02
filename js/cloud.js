@@ -14,6 +14,7 @@ function translateError(msg = '') {
   if (/invalid login credentials/i.test(msg)) return 'Correo o contraseña incorrectos.';
   if (/email not confirmed/i.test(msg)) return 'Primero confirma tu cuenta con el enlace que llegó a tu correo.';
   if (/already registered|already exists/i.test(msg)) return 'Ese correo ya tiene cuenta. Usa “Entrar”.';
+  if (/should be different|same.*password/i.test(msg)) return 'La contraseña nueva debe ser distinta a la anterior.';
   if (/password.*(at least|characters)|weak/i.test(msg)) return 'La contraseña debe tener al menos 6 caracteres.';
   if (/rate limit|too many|security purposes/i.test(msg)) return 'Demasiados intentos. Espera un minuto e inténtalo de nuevo.';
   if (/failed to fetch|network/i.test(msg)) return 'Sin conexión con el servidor.';
@@ -29,13 +30,21 @@ export const cloud = {
   get userId() { return this.session?.user?.id ?? null; },
   get email() { return this.session?.user?.email ?? ''; },
 
+  // Resultado del enlace de recuperación de contraseña: 'recovery' | 'expired' | null
+  urlAuth: null,
+
   async init(onAuthChange) {
     if (!this.configured) return false;
+    const hash = new URLSearchParams(location.hash.slice(1));
+    if (hash.get('type') === 'recovery') this.urlAuth = 'recovery';
+    else if (hash.get('error_code') || hash.get('error')) this.urlAuth = 'expired';
+
     const { createClient } = await import(SUPABASE_ESM);
     this.client = createClient(CONFIG.supabaseUrl, CONFIG.supabaseAnonKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'octubre-juntos-auth' },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'octubre-juntos-auth' },
     });
     this.session = check(await this.client.auth.getSession()).session;
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
     this.client.auth.onAuthStateChange((event, session) => {
       this.session = session;
       onAuthChange?.(event);
@@ -52,6 +61,15 @@ export const cloud = {
     const data = check(await this.client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } }));
     this.session = data.session;
     return Boolean(data.session);
+  },
+
+  async updatePassword(password) {
+    check(await this.client.auth.updateUser({ password }));
+  },
+
+  // El enlace del correo abre la app; Supabase debe tener esta dirección como Site URL.
+  async sendPasswordReset(email) {
+    check(await this.client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname }));
   },
 
   async signOut() {
@@ -99,6 +117,15 @@ export const cloud = {
       .eq('couple_id', coupleId).gt('updated_at', sinceISO).order('updated_at'));
   },
 
+  async upsertComment(row) {
+    check(await this.client.from('memory_comments').upsert(row));
+  },
+
+  async pullComments(coupleId, sinceISO) {
+    return check(await this.client.from('memory_comments').select('*')
+      .eq('couple_id', coupleId).gt('updated_at', sinceISO).order('updated_at'));
+  },
+
   async uploadMedia(coupleId, memoryId, blob) {
     const ext = (blob.type.split('/')[1] || 'bin').replace('quicktime', 'mov').replace('jpeg', 'jpg');
     const path = `${coupleId}/${memoryId}-${Date.now().toString(36)}.${ext}`;
@@ -119,6 +146,7 @@ export const cloud = {
     this.channel = this.client.channel(`couple-${coupleId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'memories', filter: `couple_id=eq.${coupleId}` }, onChange)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'couples', filter: `id=eq.${coupleId}` }, onChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'memory_comments', filter: `couple_id=eq.${coupleId}` }, onChange)
       .subscribe();
   },
 

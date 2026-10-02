@@ -77,6 +77,35 @@ export function buildSchedule(seed, overrides = {}) {
   return schedule;
 }
 
+// Cambios de calendario para poner el tema `index` en `day`. Mantiene la cantidad de días
+// de cada tipo (las medallas dependen de eso) y evita repetir temas:
+// - si el tema ya estaba en un día futuro, intercambia ambos días;
+// - si es de otro tipo, el tema anterior pasa al siguiente día futuro del tipo nuevo.
+// Devuelve null si el tema ya se usó en un día pasado.
+export function promptChange(schedule, day, index, today) {
+  const oldIndex = schedule[day];
+  if (oldIndex === index) return {};
+  const usedOn = schedule.findIndex((v, d) => d > 0 && d !== day && v === index);
+  if (usedOn > 0 && usedOn <= today) return null;
+  const patch = { [day]: index };
+  if (usedOn > 0) {
+    patch[usedOn] = oldIndex;
+    return patch;
+  }
+  const newType = PROMPTS[index].type;
+  if (PROMPTS[oldIndex].type !== newType) {
+    const future = schedule.findIndex((v, d) => d > Math.max(day, today) && PROMPTS[v]?.type === newType);
+    if (future > 0) patch[future] = oldIndex;
+  }
+  return patch;
+}
+
+// Día (pasado o de hoy) en el que ya se usó un tema, o 0.
+export function usedOnPastDay(schedule, index, day, today) {
+  const d = schedule.findIndex((v, i) => i > 0 && i !== day && i <= today && v === index);
+  return d > 0 ? d : 0;
+}
+
 // Elige otro tema del mismo tipo (para no alterar las medallas), preferentemente uno
 // que no esté asignado a ningún otro día.
 export function alternativePrompt(schedule, day) {

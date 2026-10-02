@@ -1,4 +1,4 @@
-# Octubre Juntos
+# October Lover
 
 31 días, 31 recuerdos. Un reto de octubre para pareja: cada día aparece un tema nuevo
 (dibujo, escritura o foto/video), cada uno agrega su recuerdo y juntos van desbloqueando medallas.
@@ -36,14 +36,16 @@ por ejemplo <http://localhost:5173/?hoy=2026-10-05>.
 
 1. Crea una cuenta y un proyecto en <https://supabase.com>.
 2. **SQL Editor → New query**: pega todo `supabase/schema.sql` y presiona **Run**.
-3. **Authentication → Emails → Templates → Magic Link**: agrega el código al cuerpo del correo
-   para que llegue un código de 6 dígitos en lugar de solo un enlace. Por ejemplo:
-   ```html
-   <h2>Tu código para Octubre Juntos</h2>
-   <p style="font-size:28px;letter-spacing:6px"><strong>{{ .Token }}</strong></p>
-   ```
-   (Se usa código y no enlace porque, en iPhone, el enlace abriría Safari y no la app instalada.)
-4. **Project Settings → API**: copia la *Project URL* y la *anon public key* en `js/config.js`:
+   (Si ya lo habías ejecutado antes de que existieran los comentarios, ejecuta solo
+   `supabase/02-comentarios.sql` en una consulta nueva.)
+3. **Authentication → Sign In / Providers → Email**: desactiva **Confirm email** y guarda.
+   Así cada uno crea su cuenta con correo y contraseña sin esperar un correo de confirmación.
+   (Si prefieres dejarla activa, pon la dirección de la app en **Authentication → URL Configuration → Site URL**
+   para que el enlace de confirmación lleve ahí.)
+4. **Authentication → URL Configuration → Site URL**: pon la dirección de la app
+   (`https://carlucky88.github.io/October-Lover/`) y agrégala también en **Redirect URLs**.
+   Así el enlace de "¿Olvidaste tu contraseña?" abre la app.
+5. **Project Settings → API**: copia la *Project URL* y la *anon public key* en `js/config.js`:
    ```js
    supabaseUrl: 'https://xxxx.supabase.co',
    supabaseAnonKey: 'eyJhbGciOi...',
@@ -51,11 +53,8 @@ por ejemplo <http://localhost:5173/?hoy=2026-10-05>.
    Estas dos claves son públicas por diseño. Los datos quedan protegidos por las reglas de
    seguridad (RLS) del esquema: solo los dos miembros de la pareja pueden ver sus recuerdos y archivos.
 
-Después, en la app: **Ajustes → tu nombre → correo → código**. Uno de los dos toca
+Después, en la app: **Ajustes → tu nombre → correo y contraseña → Crear cuenta** (después, “Entrar”). Uno de los dos toca
 **Crear pareja** y comparte el código de 6 caracteres; el otro lo escribe en **Unirme**.
-
-> El correo integrado de Supabase permite pocos envíos por hora. Para dos personas alcanza;
-> si ves "Demasiados intentos", espera unos minutos.
 
 ## Publicarla (necesita HTTPS)
 
@@ -85,6 +84,15 @@ Hazlo en ambos teléfonos.
   Al desbloquear una, aparece su frase.
 - **Sin conexión.** Todo se guarda primero en el teléfono y se sube cuando hay internet.
   En Ajustes hay un respaldo descargable con todos los recuerdos, fotos y videos.
+
+- **Temas.** "Cambiar tema" permite elegir cualquier tema para el día; si es de otro tipo,
+  el calendario intercambia otro día futuro para que las medallas sigan siendo alcanzables.
+- **Reacciones y comentarios.** Cada recuerdo tiene ❤️ 😍 🥹 😂 y comentarios (requiere `02-comentarios.sql`).
+- **Recordatorio diario.** Ajustes → Recordatorio diario agrega un evento diario al Calendario del iPhone
+  (archivos en `recordatorios/`). Si cambias la dirección de la app, actualiza la URL dentro de esos archivos.
+- **Álbum para imprimir.** Calendario → Álbum → "Álbum para imprimir": portada, cada día con sus fotos,
+  textos y comentarios, y las medallas. "Imprimir / PDF" abre la hoja de impresión (en iPhone, desde ahí se guarda como PDF).
+- **Contraseña.** Ajustes → Tu cuenta para cambiarla; "¿Olvidaste tu contraseña?" envía un enlace por correo.
 
 ## Personalizar
 
