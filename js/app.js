@@ -153,10 +153,16 @@ function mediaUrl(m) {
         }
         m.hasLocalMedia = true;
       }
-      return blob ? URL.createObjectURL(blob) : null;
+      if (!blob) {
+        // Aún sin sesión (la nube sigue conectando): no guardar el fallo, se reintenta al volver a dibujar.
+        urlCache.delete(m.id);
+        return null;
+      }
+      return URL.createObjectURL(blob);
     })().catch(err => {
       console.warn('No se pudo cargar el archivo', err);
       urlCache.delete(m.id);
+      m.mediaError = err.message || String(err);
       return null;
     });
     urlCache.set(m.id, p);
@@ -168,7 +174,17 @@ function mediaBox(m, { contain = false } = {}) {
   const box = h('div', { class: `media${contain ? ' contain' : ''}` }, 'Cargando…');
   mediaUrl(m).then(url => {
     box.textContent = '';
-    if (!url) { box.textContent = navigator.onLine ? 'Archivo no disponible' : 'Sin conexión'; return; }
+    if (!url) {
+      const waiting = m.mediaPath && !m.mediaError && cloud.configured && !cloud.userId;
+      box.append(h('div', { style: 'text-align:center;padding:16px' },
+        h('div', {}, !navigator.onLine ? 'Sin conexión' : waiting ? 'Conectando…' : 'No se pudo cargar el archivo'),
+        m.mediaError && h('div', { class: 'small', style: 'margin-top:4px;opacity:.7' }, m.mediaError),
+        m.mediaPath && h('button', {
+          class: 'btn btn-secondary', type: 'button', style: 'margin-top:12px;min-height:38px',
+          onclick: () => { m.mediaError = null; box.replaceWith(mediaBox(m, { contain })); },
+        }, 'Reintentar')));
+      return;
+    }
     if (m.mediaType === 'video') {
       box.append(h('video', { src: `${url}#t=0.1`, controls: true, playsinline: true, preload: 'metadata' }));
     } else {
