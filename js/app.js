@@ -491,6 +491,7 @@ async function applyPromptPatch(patch) {
 // Sortea un tema al azar entre los que no se han usado en días anteriores.
 // promptChange acomoda otro día futuro si el tipo cambia, para no afectar las medallas.
 async function drawRandomTopic(day) {
+  if (!confirm('¿Sortear otro tema? El tema de hoy cambiará para los dos.')) return;
   const { today } = challengeState();
   const current = state.schedule[day];
   const pool = PROMPTS.map((p, i) => i).filter(i => i !== current && !usedOnPastDay(state.schedule, i, day, today));
@@ -1667,7 +1668,25 @@ function bindEvents() {
   setInterval(() => { if (document.visibilityState === 'visible') syncSoon(); }, 120000);
 }
 
+// En la app instalada de iOS, la altura visible descuenta la barra de estado aunque el
+// contenido empiece debajo de ella, y queda un hueco bajo la barra de pestañas.
+// Si la ventana mide menos que la pantalla, usamos la altura real de la pantalla.
+function fitStandaloneHeight() {
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  const portrait = innerHeight > innerWidth;
+  const app = document.querySelector('.app');
+  const gap = screen.height - innerHeight;
+  if (standalone && portrait && gap > 0 && gap < 120) {
+    document.documentElement.style.setProperty('--app-h', `${screen.height}px`);
+    app.classList.add('full-screen');
+  } else {
+    app.classList.remove('full-screen');
+  }
+}
+
 async function start() {
+  fitStandaloneHeight();
+  addEventListener('resize', fitStandaloneHeight);
   bindEvents();
   await loadLocal();
   updateSyncState();
