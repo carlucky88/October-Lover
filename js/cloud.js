@@ -126,6 +126,37 @@ export const cloud = {
       .eq('couple_id', coupleId).gt('updated_at', sinceISO).order('updated_at'));
   },
 
+  async saveTopicRequest(row) {
+    check(await this.client.from('topic_requests').upsert(row));
+  },
+
+  async topicRequests(coupleId, day) {
+    return check(await this.client.from('topic_requests').select('*')
+      .eq('couple_id', coupleId).eq('day', day).order('created_at', { ascending: false }).limit(5));
+  },
+
+  async savePushSubscription(coupleId, sub) {
+    const { endpoint, keys } = sub.toJSON();
+    check(await this.client.from('push_subscriptions').upsert({
+      endpoint, couple_id: coupleId, user_id: this.userId, p256dh: keys.p256dh, auth: keys.auth,
+    }));
+  },
+
+  async removePushSubscription(endpoint) {
+    check(await this.client.from('push_subscriptions').delete().eq('endpoint', endpoint));
+  },
+
+  // Pide a la función "notify" que avise a la pareja. Nunca interrumpe la app si falla.
+  async notify(title, body, tag) {
+    if (!this.client || !this.userId) return;
+    try {
+      const { error } = await this.client.functions.invoke('notify', { body: { title, body, tag } });
+      if (error) console.warn('notify', error);
+    } catch (err) {
+      console.warn('notify', err);
+    }
+  },
+
   async uploadMedia(coupleId, memoryId, blob) {
     const ext = (blob.type.split('/')[1] || 'bin').replace('quicktime', 'mov').replace('jpeg', 'jpg');
     const path = `${coupleId}/${memoryId}-${Date.now().toString(36)}.${ext}`;
@@ -147,6 +178,7 @@ export const cloud = {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'memories', filter: `couple_id=eq.${coupleId}` }, onChange)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'couples', filter: `id=eq.${coupleId}` }, onChange)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'memory_comments', filter: `couple_id=eq.${coupleId}` }, onChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'topic_requests', filter: `couple_id=eq.${coupleId}` }, onChange)
       .subscribe();
   },
 

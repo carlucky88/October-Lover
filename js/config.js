@@ -6,4 +6,6 @@ export const CONFIG = {
   year: 2026,
   supabaseUrl: 'https://lhstqxuhlzxtqjyuttto.supabase.co',
   supabaseAnonKey: 'sb_publishable_up4WqB_vVQQRMemWyT4SVQ_BTFvm_Fx',
+  // Clave pública para notificaciones push (la privada solo vive en Supabase).
+  vapidPublicKey: 'BDAmrVubd9LZrxCw78nLmiKCNYkINF-3xiZJvWzUQs5lX6HES_u4bIPZxfaQIYI4lNuRqBJTs3vfTlOagi0A24g',
 };

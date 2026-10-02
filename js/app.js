@@ -32,7 +32,8 @@ const state = {
   openDay: null,        // día abierto en la hoja de detalle
   sheet: null,          // 'day' | 'settings'
   auth: { email: '', busy: false, recovery: false },
-  openComposer: null,   // id del recuerdo con el campo de comentario abierto
+  topicRequest: null,   // solicitud de cambio de tema de hoy (pendiente o recién resuelta)
+  pushOn: false,        // este teléfono tiene notificaciones push activas
 };
 
 // ───────────────────────── Utilidades ─────────────────────────
@@ -67,7 +68,29 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.remove("show"), Math.max(2800, msg.length * 60));
 }
 
+// Diálogo de confirmación con el estilo de la app. Devuelve una promesa con true/false.
+function ask({ title, message = '', confirmText = 'Aceptar', cancelText = 'Cancelar', danger = false }) {
+  return new Promise(resolve => {
+    const overlay = $('dialog');
+    const done = value => {
+      overlay.hidden = true;
+      overlay.onclick = null;
+      resolve(value);
+    };
+    overlay.firstElementChild.replaceChildren(
+      h('div', { class: 'dialog-title' }, title),
+      message && h('p', { class: 'dialog-text' }, message),
+      h('div', { class: 'dialog-actions' },
+        h('button', { class: 'btn btn-secondary', type: 'button', onclick: () => done(false) }, cancelText),
+        h('button', { class: `btn ${danger ? 'btn-danger-solid' : 'btn-primary'}`, type: 'button', onclick: () => done(true) }, confirmText)),
+    );
+    overlay.onclick = e => { if (e.target === overlay) done(false); };
+    overlay.hidden = false;
+  });
+}
+
 const fmtDay = d => dateForDay(d).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+const clipText = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const initial = name => (name || '?').trim().charAt(0).toUpperCase() || '?';
 const uuid = () => crypto.randomUUID?.() ?? ([1e7] + -1e3 + -4e3 + -8e3 + -1e11)
@@ -408,10 +431,17 @@ function renderToday() {
     who,
     h('div', { class: `btn-row${mems.length ? ' single' : ''}` },
       h('button', { class: 'btn btn-primary', onclick: () => openEditor(day) }, mineDone ? 'Agregar otro recuerdo' : 'Agregar recuerdo'),
-      !mems.length && h('button', { class: 'btn btn-secondary', onclick: () => drawRandomTopic(day) }, '🎲 Otro tema'),
+      !mems.length && h('button', {
+        class: 'btn btn-secondary',
+        disabled: state.topicRequest?.status === 'pending' && state.topicRequest.day === day,
+        onclick: () => requestOtherTopic(day),
+      }, '🎲 Otro tema'),
     ),
+    topicRequestCard(day),
     monthProgress(day),
   ));
+  const push = pushNudge();
+  if (push) view.append(push);
 
   const missed = [];
   for (let d = 1; d < day; d++) if (!memoriesForDay(d).length) missed.push(d);
@@ -486,23 +516,135 @@ async function applyPromptPatch(patch) {
   render();
 }
 
-// ───────────────────────── Cambiar tema (sorteo) ─────────────────────────
+// ───────────────────────── Cambiar tema (sorteo con aprobación) ─────────────────────────
 
 // Sortea un tema al azar entre los que no se han usado en días anteriores.
 // promptChange acomoda otro día futuro si el tipo cambia, para no afectar las medallas.
 async function drawRandomTopic(day) {
-  if (!confirm('¿Sortear otro tema? El tema de hoy cambiará para los dos.')) return;
   const { today } = challengeState();
   const current = state.schedule[day];
   const pool = PROMPTS.map((p, i) => i).filter(i => i !== current && !usedOnPastDay(state.schedule, i, day, today));
-  if (!pool.length) { toast('Ya no quedan temas por sortear'); return; }
-  const index = pool[Math.floor(Math.random() * pool.length)];
-  const patch = promptChange(state.schedule, day, index, today);
-  if (!patch) return;
+  if (!pool.length) { toast('Ya no quedan temas por sortear'); return null; }
+  const patch = promptChange(state.schedule, day, pool[Math.floor(Math.random() * pool.length)], today);
+  if (!patch) return null;
   await applyPromptPatch(patch);
-  const title = document.querySelector('#view-today .prompt-title');
-  title?.classList.add('drawn');
-  toast(`🎲 Nuevo tema: ${PROMPTS[state.schedule[day]].title}`);
+  document.querySelector('#view-today .prompt-title')?.classList.add('drawn');
+  return state.schedule[day];
+}
+
+const partner = () => state.members.find(m => m.user_id !== cloud.userId);
+const partnerName = () => partner()?.display_name || 'tu pareja';
+
+// Con pareja conectada, "Otro tema" envía una solicitud; sin pareja, sortea directamente.
+async function requestOtherTopic(day) {
+  if (!paired() || !partner()) {
+    const ok = await ask({ title: '¿Sortear otro tema?', message: 'El tema de hoy se cambiará por uno al azar.', confirmText: 'Sortear' });
+    if (!ok) return;
+    const index = await drawRandomTopic(day);
+    if (index != null) toast(`🎲 Nuevo tema: ${PROMPTS[index].title}`);
+    return;
+  }
+  const ok = await ask({
+    title: '¿Pedir otro tema?',
+    message: `Le enviaremos la solicitud a ${partnerName()}. Si la aprueba, se sorteará un tema nuevo para los dos; si no, se mantiene “${PROMPTS[state.schedule[day]].title}”.`,
+    confirmText: 'Enviar solicitud',
+  });
+  if (!ok) return;
+  const row = {
+    id: uuid(), couple_id: state.couple.id, day, requested_by: cloud.userId,
+    requester_name: myName(), status: 'pending',
+  };
+  try {
+    await cloud.saveTopicRequest(row);
+  } catch (err) {
+    toast(/topic_requests/.test(err.message) ? 'Falta activar las solicitudes en Supabase (ver README).' : err.message);
+    return;
+  }
+  state.topicRequest = { ...row, created_at: new Date().toISOString() };
+  render();
+  toast(`Solicitud enviada a ${partnerName()}`);
+  cloud.notify(`🎲 ${myName()} quiere cambiar el tema`, `Tema actual: ${PROMPTS[state.schedule[day]].title}. Abre October Lover para aprobarlo.`, `topic-${day}`);
+}
+
+async function answerTopicRequest(approve) {
+  const req = state.topicRequest;
+  if (!req) return;
+  if (approve) {
+    const ok = await ask({ title: '¿Aprobar el cambio?', message: 'Se sorteará un tema nuevo al azar para los dos.', confirmText: 'Aprobar' });
+    if (!ok) return;
+  }
+  try {
+    let newPrompt = null;
+    if (approve) {
+      newPrompt = await drawRandomTopic(req.day);
+      if (newPrompt == null) return;
+      await syncNow();
+    }
+    const updated = { ...req, status: approve ? 'approved' : 'rejected', decided_by: cloud.userId, new_prompt: newPrompt };
+    delete updated.updated_at;
+    await cloud.saveTopicRequest(updated);
+    state.topicRequest = updated;
+    render();
+    if (approve) {
+      toast(`🎲 Nuevo tema: ${PROMPTS[newPrompt].title}`);
+      cloud.notify(`✅ ${myName()} aprobó el cambio`, `Nuevo tema de hoy: ${PROMPTS[newPrompt].title}`, `topic-${req.day}`);
+    } else {
+      toast('Se mantiene el tema de hoy');
+      cloud.notify(`${myName()} prefirió mantener el tema`, `Hoy sigue siendo: ${PROMPTS[state.schedule[req.day]].title}`, `topic-${req.day}`);
+    }
+  } catch (err) {
+    toast(err.message || 'No se pudo responder');
+  }
+}
+
+async function cancelTopicRequest() {
+  const req = state.topicRequest;
+  if (!req) return;
+  const updated = { ...req, status: 'cancelled' };
+  delete updated.updated_at;
+  try {
+    await cloud.saveTopicRequest(updated);
+    state.topicRequest = null;
+    render();
+    toast('Solicitud cancelada');
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+// Tarjeta de solicitud que se muestra en "Hoy".
+function topicRequestCard(day) {
+  const req = state.topicRequest;
+  if (!req || req.day !== day || req.status !== 'pending') return null;
+  if (req.requested_by === cloud.userId) {
+    return h('div', { class: 'request mine' },
+      h('div', { class: 'request-text' }, `⏳ Esperando que ${partnerName()} apruebe el cambio de tema.`),
+      h('button', { class: 'text-btn', type: 'button', onclick: cancelTopicRequest }, 'Cancelar'));
+  }
+  return h('div', { class: 'request' },
+    h('div', { class: 'request-text' }, h('strong', {}, req.requester_name || partnerName()), ' quiere cambiar el tema de hoy por uno al azar.'),
+    h('div', { class: 'request-actions' },
+      h('button', { class: 'btn btn-secondary', type: 'button', onclick: () => answerTopicRequest(false) }, 'Mantener'),
+      h('button', { class: 'btn btn-primary', type: 'button', onclick: () => answerTopicRequest(true) }, 'Aprobar')));
+}
+
+// Trae la solicitud más reciente de hoy y avisa si se resolvió mientras tanto.
+async function pullTopicRequest() {
+  const { phase, today } = challengeState();
+  if (phase !== 'during') { state.topicRequest = null; return; }
+  try {
+    const rows = await cloud.topicRequests(state.couple.id, today);
+    const latest = rows[0] || null;
+    const before = state.topicRequest;
+    if (before && latest && before.id === latest.id && before.status === 'pending' && latest.status !== 'pending'
+        && latest.requested_by === cloud.userId) {
+      if (latest.status === 'approved') toast(`✅ ${partnerName()} aprobó el cambio de tema`);
+      if (latest.status === 'rejected') toast(`${partnerName()} prefirió mantener el tema`);
+    }
+    state.topicRequest = latest;
+  } catch (err) {
+    console.warn('Solicitudes de tema', err);
+  }
 }
 
 // ───────────────────────── Tarjeta de recuerdo ─────────────────────────
@@ -562,10 +704,7 @@ function conversation(m) {
       onclick: () => toggleReaction(m, emoji),
     }, emoji, who.length > 0 && h('span', {}, who.length));
   }),
-  h('button', {
-    class: 'reaction comment-btn', type: 'button',
-    onclick: () => { state.openComposer = state.openComposer === m.id ? null : m.id; render(); },
-  }, '💬', comments.length > 0 && h('span', {}, comments.length)));
+  );
 
   const list = comments.map(c => h('div', { class: 'comment' },
     h('span', { class: 'comment-author' }, commenterName(c)), ' ', c.body,
@@ -574,17 +713,21 @@ function conversation(m) {
       onclick: () => removeComment(c),
     }, '✕')));
 
-  let composer = null;
-  if (state.openComposer === m.id) {
-    const input = h('input', { type: 'text', placeholder: 'Escribe un comentario…', maxlength: 500, enterkeyhint: 'send' });
-    const send = () => addComment(m, input);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
-    composer = h('div', { class: 'composer' }, input, h('button', { class: 'btn btn-primary', type: 'button', onclick: send }, 'Enviar'));
-    setTimeout(() => input.focus(), 50);
-  }
+  const input = h('input', {
+    type: 'text', maxlength: 500, enterkeyhint: 'send', 'aria-label': 'Comentario',
+    placeholder: 'Escribe un comentario…',
+  });
+  input.value = drafts.get(m.id) || '';
+  input.addEventListener('input', () => drafts.set(m.id, input.value));
+  const send = () => addComment(m, input);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+  const composer = h('div', { class: 'composer' }, input,
+    h('button', { class: 'send-btn', type: 'button', 'aria-label': 'Enviar comentario', onclick: send }, '➤'));
 
   return h('div', { class: 'conversation' }, bar, list, composer);
 }
+
+const drafts = new Map(); // memoryId → texto del comentario a medio escribir
 
 function commentRow(m, kind, body) {
   return {
@@ -630,14 +773,15 @@ async function addComment(m, input) {
   const ok = await saveComment(commentRow(m, 'comment', body));
   input.disabled = false;
   if (ok) {
+    drafts.delete(m.id);
     input.blur();
-    state.openComposer = null;
     render();
+    if (!isMine(m)) cloud.notify(`💬 ${myName()} comentó tu recuerdo`, clipText(body, 120), `comment-${m.id}`);
   }
 }
 
 async function removeComment(c) {
-  if (!confirm('¿Borrar este comentario?')) return;
+  if (!(await ask({ title: '¿Borrar este comentario?', confirmText: 'Borrar', danger: true }))) return;
   const row = { ...c, deleted: true };
   delete row.updated_at;
   if (await saveComment(row)) render();
@@ -1058,7 +1202,7 @@ async function saveEditor(e) {
 }
 
 async function deleteMemory(m) {
-  if (!confirm('¿Borrar este recuerdo? No se puede deshacer.')) return;
+  if (!(await ask({ title: '¿Borrar este recuerdo?', message: 'Se borra también su foto o video. No se puede deshacer.', confirmText: 'Borrar', danger: true }))) return;
   const current = await db.getMemory(m.id);
   if (!current) return;
   if (current.remote) {
@@ -1103,6 +1247,7 @@ function renderSettings() {
   if (state.auth.recovery && cloud.userId) groups.push(recoverySettings());
   groups.push(syncSettings());
   if (cloud.userId && !state.auth.recovery) groups.push(accountSettings());
+  if (paired()) groups.push(pushSettings());
   groups.push(reminderSettings());
 
   // Respaldo
@@ -1228,6 +1373,103 @@ function forgotPassword(email) {
   });
 }
 
+// ───────────────────────── Notificaciones push ─────────────────────────
+
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isStandalone = () => navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// 'on' | 'off' | 'denied' | 'install' (iPhone fuera de la app instalada) | 'unsupported'
+function pushStatus() {
+  if (isIOS() && !isStandalone()) return 'install';
+  if (!pushSupported() || !CONFIG.vapidPublicKey) return 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  return Notification.permission === 'granted' && state.pushOn ? 'on' : 'off';
+}
+
+function vapidKeyBytes(base64url) {
+  const pad = '='.repeat((4 - (base64url.length % 4)) % 4);
+  const raw = atob((base64url + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+
+async function enablePush() {
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      toast('Las notificaciones quedaron desactivadas. Puedes activarlas en Ajustes del iPhone → Notificaciones.');
+      render();
+      return;
+    }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription())
+      || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidKeyBytes(CONFIG.vapidPublicKey) }));
+    await cloud.savePushSubscription(state.couple.id, sub);
+    state.pushOn = true;
+    toast('🔔 Notificaciones activadas');
+  } catch (err) {
+    console.error('push', err);
+    toast(/push_subscriptions/.test(err.message || '') ? 'Falta activar las notificaciones en Supabase (ver README).' : `No se pudieron activar: ${err.message || err}`);
+  }
+  render();
+  if (state.sheet === 'settings') renderSettings();
+}
+
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await cloud.removePushSubscription(sub.endpoint).catch(() => {});
+      await sub.unsubscribe();
+    }
+  } catch (err) {
+    console.warn('push', err);
+  }
+  state.pushOn = false;
+  toast('Notificaciones desactivadas');
+  render();
+  if (state.sheet === 'settings') renderSettings();
+}
+
+// Revisa si este teléfono ya tiene una suscripción y la vuelve a registrar (por si cambió de pareja).
+async function refreshPushState() {
+  if (!pushSupported() || !paired() || Notification.permission !== 'granted') { state.pushOn = false; return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    state.pushOn = Boolean(sub);
+    if (sub) await cloud.savePushSubscription(state.couple.id, sub);
+  } catch (err) {
+    console.warn('push', err);
+  }
+}
+
+function pushSettings() {
+  const status = pushStatus();
+  const texts = {
+    on: 'Activadas. Te avisaremos cuando tu pareja agregue un recuerdo, comente uno tuyo o pida cambiar el tema.',
+    off: 'Recibe un aviso cuando tu pareja agregue un recuerdo, comente uno tuyo o pida cambiar el tema.',
+    denied: 'Están bloqueadas para esta app. Actívalas en Ajustes del iPhone → Notificaciones → October Lover.',
+    install: 'En iPhone solo funcionan con la app instalada: en Safari toca Compartir → “Agregar a inicio” y ábrela desde ese ícono.',
+    unsupported: 'Este navegador no permite notificaciones.',
+  };
+  return h('div', { class: 'settings-group' },
+    h('h3', {}, 'Notificaciones'),
+    h('p', {}, texts[status]),
+    status === 'off' && h('button', { class: 'btn btn-primary block', type: 'button', onclick: enablePush }, '🔔 Activar notificaciones'),
+    status === 'on' && h('button', { class: 'btn btn-secondary block', type: 'button', onclick: disablePush }, 'Desactivar en este teléfono'));
+}
+
+// Recordatorio discreto en "Hoy" mientras las notificaciones estén apagadas.
+function pushNudge() {
+  if (!paired() || pushStatus() !== 'off') return null;
+  return h('button', { class: 'nudge push-nudge', type: 'button', onclick: enablePush },
+    h('span', {}, '🔔'),
+    h('span', { style: 'flex:1' }, `Activa las notificaciones para saber cuándo ${partnerName()} agrega un recuerdo.`),
+    h('span', {}, '›'));
+}
+
 function reminderSettings() {
   let saved = 20;
   try { saved = +localStorage.getItem('reminderHour') || 20; } catch { /* sin almacenamiento */ }
@@ -1345,6 +1587,7 @@ async function adoptCloudCouple({ carryOverrides = false } = {}) {
   cloud.subscribe(state.couple.id, syncSoon);
   render();
   await syncNow();
+  await refreshPushState();
 }
 
 async function signOut() {
@@ -1352,13 +1595,13 @@ async function signOut() {
   const warning = pending
     ? `Hay ${pending} recuerdo(s) sin sincronizar que se perderán. ¿Cerrar sesión de todos modos?`
     : 'Se borrarán los datos de este teléfono (en la nube siguen guardados). ¿Cerrar sesión?';
-  if (!confirm(warning)) return;
+  if (!(await ask({ title: 'Cerrar sesión', message: warning, confirmText: 'Cerrar sesión', danger: true }))) return;
   await cloud.signOut().catch(() => {});
   await wipeLocal();
 }
 
 async function resetDevice() {
-  if (!confirm('¿Borrar todos los datos de este teléfono?')) return;
+  if (!(await ask({ title: '¿Borrar los datos de este teléfono?', message: paired() ? 'Lo sincronizado sigue en la nube.' : 'Se perderán los recuerdos guardados aquí.', confirmText: 'Borrar', danger: true }))) return;
   if (cloud.userId) await cloud.signOut().catch(() => {});
   await wipeLocal();
 }
@@ -1528,6 +1771,10 @@ async function pushMemories() {
       else { m.hasLocalMedia = false; m.mediaType = null; }
     }
     await cloud.upsertMemory(toRow(m));
+    if (!original.remote) {
+      const p = promptOf(m);
+      cloud.notify(`💚 ${myName()} agregó un recuerdo`, `Día ${m.day} · ${p.title}`, `memory-${m.id}`);
+    }
     if (m.staleMediaPaths?.length) await cloud.removeMedia(m.staleMediaPaths).catch(console.warn);
 
     // Si lo editaron mientras subía, conservamos la edición y la marca de pendiente.
@@ -1587,6 +1834,7 @@ async function pullChanges() {
   }
   await db.set('lastPull', latest);
   await pullComments();
+  await pullTopicRequest();
 
   const info = await cloud.myCouple();
   if (info) {
@@ -1668,17 +1916,6 @@ function bindEvents() {
   setInterval(() => { if (document.visibilityState === 'visible') syncSoon(); }, 120000);
 }
 
-// Corrección puntual del 1 de octubre: el día 1 vuelve a "Primer beso" (tema 0) después de
-// un sorteo accidental. Se aplica una sola vez por teléfono y solo si aún no hay recuerdos ese día.
-async function restoreFirstKissOnce() {
-  if (!state.couple || challengeState().today !== 1 || memoriesForDay(1).length) return;
-  if (await db.get('fix:day1-primer-beso')) return;
-  await db.set('fix:day1-primer-beso', true);
-  if (state.schedule[1] === 0) return;
-  const patch = promptChange(state.schedule, 1, 0, 1);
-  if (patch) await applyPromptPatch(patch);
-}
-
 async function start() {
   bindEvents();
   await loadLocal();
@@ -1701,7 +1938,7 @@ async function start() {
         if (state.couple) {
           cloud.subscribe(state.couple.id, syncSoon);
           await syncNow();
-          await restoreFirstKissOnce();
+          await refreshPushState();
         } else {
           await adoptCloudCouple().catch(err => console.warn(err));
         }
