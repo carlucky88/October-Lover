@@ -2,7 +2,7 @@ import { CONFIG } from './config.js';
 import { PROMPTS, TYPES, MEDALS, TOGETHER_MEDALS } from './content.js';
 import {
   DAYS, now, challengeState, dateForDay, firstWeekdayOffset,
-  buildSchedule, alternativePrompt, randomSeed, promptChange, usedOnPastDay,
+  buildSchedule, randomSeed, promptChange, usedOnPastDay,
 } from './challenge.js';
 import { db } from './db.js';
 import { cloud } from './cloud.js';
@@ -30,8 +30,7 @@ const state = {
   sync: 'local',
   syncError: '',
   openDay: null,        // día abierto en la hoja de detalle
-  sheet: null,          // 'day' | 'settings' | 'topic'
-  topicDay: null,
+  sheet: null,          // 'day' | 'settings'
   auth: { email: '', busy: false, recovery: false },
   openComposer: null,   // id del recuerdo con el campo de comentario abierto
 };
@@ -326,7 +325,6 @@ function render() {
   if (state.tab === 'calendar') renderCalendar();
   if (state.tab === 'medals') renderMedals();
   if (state.sheet === 'day') renderDaySheet();
-  if (state.sheet === 'topic') renderTopicSheet();
   // No recrear Ajustes mientras la persona escribe en un campo.
   if (state.sheet === 'settings' && !sheetEl().contains(document.activeElement)) renderSettings();
 }
@@ -410,7 +408,7 @@ function renderToday() {
     who,
     h('div', { class: `btn-row${mems.length ? ' single' : ''}` },
       h('button', { class: 'btn btn-primary', onclick: () => openEditor(day) }, mineDone ? 'Agregar otro recuerdo' : 'Agregar recuerdo'),
-      !mems.length && h('button', { class: 'btn btn-secondary', onclick: () => openTopicPicker(day) }, 'Cambiar tema'),
+      !mems.length && h('button', { class: 'btn btn-secondary', onclick: () => drawRandomTopic(day) }, '🎲 Otro tema'),
     ),
     monthProgress(day),
   ));
@@ -488,54 +486,22 @@ async function applyPromptPatch(patch) {
   render();
 }
 
-// ───────────────────────── Hoja: elegir tema ─────────────────────────
+// ───────────────────────── Cambiar tema (sorteo) ─────────────────────────
 
-function openTopicPicker(day) {
-  state.topicDay = day;
-  openSheet('topic');
-  renderTopicSheet();
-}
-
-async function chooseTopic(index) {
-  const day = state.topicDay;
-  const patch = index == null
-    ? { [day]: alternativePrompt(state.schedule, day) }
-    : promptChange(state.schedule, day, index, challengeState().today);
-  if (!patch) { toast('Ese tema ya se usó en un día anterior'); return; }
-  closeSheet();
-  await applyPromptPatch(patch);
-  toast(`Tema de hoy: ${PROMPTS[state.schedule[day]].title}`);
-}
-
-function renderTopicSheet() {
-  const day = state.topicDay;
+// Sortea un tema al azar entre los que no se han usado en días anteriores.
+// promptChange acomoda otro día futuro si el tipo cambia, para no afectar las medallas.
+async function drawRandomTopic(day) {
   const { today } = challengeState();
   const current = state.schedule[day];
-  const content = [
-    h('div', { class: 'sheet-head' },
-      h('div', { style: 'width:60px' }),
-      h('div', { class: 'sheet-title' }, 'Elegir tema'),
-      h('button', { class: 'text-btn', type: 'button', onclick: closeSheet }, 'Cerrar')),
-    h('button', { class: 'btn btn-secondary block', type: 'button', onclick: () => chooseTopic(null) }, '🎲 Sorpréndeme'),
-    h('p', { class: 'small muted', style: 'margin:10px 2px 4px' },
-      'Si eliges un tema de otro tipo, se acomoda otro día del mes para que las medallas sigan siendo alcanzables.'),
-  ];
-  for (const type of Object.keys(TYPES)) {
-    content.push(h('div', { class: 'section-title' }, `${TYPES[type].emoji} ${TYPES[type].plural}`));
-    PROMPTS.forEach((p, i) => {
-      if (p.type !== type) return;
-      const usedDay = usedOnPastDay(state.schedule, i, day, today);
-      content.push(h('button', {
-        class: `topic${i === current ? ' current' : ''}`,
-        type: 'button',
-        disabled: Boolean(usedDay),
-        onclick: () => (i === current ? closeSheet() : chooseTopic(i)),
-      },
-      h('div', { class: 'topic-title' }, p.title, i === current && h('span', { class: 'topic-tag' }, 'Hoy')),
-      h('div', { class: 'topic-desc' }, usedDay ? `Ya fue el tema del día ${usedDay}` : p.description)));
-    });
-  }
-  sheetEl().replaceChildren(...content);
+  const pool = PROMPTS.map((p, i) => i).filter(i => i !== current && !usedOnPastDay(state.schedule, i, day, today));
+  if (!pool.length) { toast('Ya no quedan temas por sortear'); return; }
+  const index = pool[Math.floor(Math.random() * pool.length)];
+  const patch = promptChange(state.schedule, day, index, today);
+  if (!patch) return;
+  await applyPromptPatch(patch);
+  const title = document.querySelector('#view-today .prompt-title');
+  title?.classList.add('drawn');
+  toast(`🎲 Nuevo tema: ${PROMPTS[state.schedule[day]].title}`);
 }
 
 // ───────────────────────── Tarjeta de recuerdo ─────────────────────────
