@@ -1668,25 +1668,18 @@ function bindEvents() {
   setInterval(() => { if (document.visibilityState === 'visible') syncSoon(); }, 120000);
 }
 
-// En la app instalada de iOS, la altura visible descuenta la barra de estado aunque el
-// contenido empiece debajo de ella, y queda un hueco bajo la barra de pestañas.
-// Si la ventana mide menos que la pantalla, usamos la altura real de la pantalla.
-function fitStandaloneHeight() {
-  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
-  const portrait = innerHeight > innerWidth;
-  const app = document.querySelector('.app');
-  const gap = screen.height - innerHeight;
-  if (standalone && portrait && gap > 0 && gap < 120) {
-    document.documentElement.style.setProperty('--app-h', `${screen.height}px`);
-    app.classList.add('full-screen');
-  } else {
-    app.classList.remove('full-screen');
-  }
+// Corrección puntual del 1 de octubre: el día 1 vuelve a "Primer beso" (tema 0) después de
+// un sorteo accidental. Se aplica una sola vez por teléfono y solo si aún no hay recuerdos ese día.
+async function restoreFirstKissOnce() {
+  if (!state.couple || challengeState().today !== 1 || memoriesForDay(1).length) return;
+  if (await db.get('fix:day1-primer-beso')) return;
+  await db.set('fix:day1-primer-beso', true);
+  if (state.schedule[1] === 0) return;
+  const patch = promptChange(state.schedule, 1, 0, 1);
+  if (patch) await applyPromptPatch(patch);
 }
 
 async function start() {
-  fitStandaloneHeight();
-  addEventListener('resize', fitStandaloneHeight);
   bindEvents();
   await loadLocal();
   updateSyncState();
@@ -1708,6 +1701,7 @@ async function start() {
         if (state.couple) {
           cloud.subscribe(state.couple.id, syncSoon);
           await syncNow();
+          await restoreFirstKissOnce();
         } else {
           await adoptCloudCouple().catch(err => console.warn(err));
         }
