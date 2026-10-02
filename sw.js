@@ -1,6 +1,6 @@
 // Service worker de October Lover: la app abre sin conexión y siempre intenta traer la versión más nueva.
 // Al publicar cambios, sube el número de CACHE.
-const CACHE = 'octubre-juntos-v7';
+const CACHE = 'octubre-juntos-v8';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/styles.css',
   './js/app.js', './js/config.js', './js/content.js', './js/challenge.js', './js/db.js', './js/cloud.js',
