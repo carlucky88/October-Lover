@@ -11,7 +11,10 @@ function check({ data, error }) {
 }
 
 function translateError(msg = '') {
-  if (/invalid.*(otp|token)|expired/i.test(msg)) return 'El código no es válido o ya expiró.';
+  if (/invalid login credentials/i.test(msg)) return 'Correo o contraseña incorrectos.';
+  if (/email not confirmed/i.test(msg)) return 'Primero confirma tu cuenta con el enlace que llegó a tu correo.';
+  if (/already registered|already exists/i.test(msg)) return 'Ese correo ya tiene cuenta. Usa “Entrar”.';
+  if (/password.*(at least|characters)|weak/i.test(msg)) return 'La contraseña debe tener al menos 6 caracteres.';
   if (/rate limit|too many|security purposes/i.test(msg)) return 'Demasiados intentos. Espera un minuto e inténtalo de nuevo.';
   if (/failed to fetch|network/i.test(msg)) return 'Sin conexión con el servidor.';
   return msg;
@@ -40,13 +43,15 @@ export const cloud = {
     return true;
   },
 
-  // El correo debe incluir {{ .Token }} en la plantilla "Magic Link" de Supabase (ver README).
-  async sendCode(email) {
-    check(await this.client.auth.signInWithOtp({ email, options: { shouldCreateUser: true } }));
+  async signIn(email, password) {
+    this.session = check(await this.client.auth.signInWithPassword({ email, password })).session;
   },
 
-  async verifyCode(email, token) {
-    this.session = check(await this.client.auth.verifyOtp({ email, token, type: 'email' })).session;
+  // Devuelve true si ya quedó la sesión iniciada; false si Supabase pide confirmar el correo primero.
+  async signUp(email, password) {
+    const data = check(await this.client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } }));
+    this.session = data.session;
+    return Boolean(data.session);
   },
 
   async signOut() {

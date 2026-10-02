@@ -26,7 +26,7 @@ const state = {
   syncError: '',
   openDay: null,        // día abierto en la hoja de detalle
   sheet: null,          // 'day' | 'settings'
-  auth: { step: 'email', email: '', busy: false },
+  auth: { email: '', busy: false },
 };
 
 // ───────────────────────── Utilidades ─────────────────────────
@@ -58,7 +58,7 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+  toastTimer = setTimeout(() => el.classList.remove("show"), Math.max(2800, msg.length * 60));
 }
 
 const fmtDay = d => dateForDay(d).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -851,23 +851,16 @@ function syncSettings() {
   const busy = state.auth.busy;
 
   if (!cloud.userId) {
-    if (state.auth.step === 'email') {
-      const email = h('input', { type: 'email', placeholder: 'tu@correo.com', value: state.auth.email, autocomplete: 'email', inputmode: 'email' });
-      group.append(
-        h('p', {}, 'Inicia sesión con tu correo. Te enviaremos un código de 6 dígitos.'),
-        email,
-        h('div', { style: 'height:10px' }),
-        h('button', { class: 'btn btn-primary block', type: 'button', disabled: busy, onclick: () => sendCode(email.value) }, busy ? 'Enviando…' : 'Enviar código'));
-    } else {
-      const code = h('input', { type: 'tel', class: 'code-input', placeholder: '000000', maxlength: 10, autocomplete: 'one-time-code', inputmode: 'numeric' });
-      group.append(
-        h('p', {}, `Escribe el código que enviamos a ${state.auth.email}.`),
-        code,
-        h('div', { style: 'height:10px' }),
-        h('button', { class: 'btn btn-primary block', type: 'button', disabled: busy, onclick: () => verifyCode(code.value) }, busy ? 'Verificando…' : 'Entrar'),
-        h('button', { class: 'btn btn-secondary block', type: 'button', onclick: () => { state.auth.step = 'email'; renderSettings(); } }, 'Usar otro correo'));
-      setTimeout(() => code.focus(), 50);
-    }
+    const email = h('input', { type: 'email', placeholder: 'tu@correo.com', value: state.auth.email, autocomplete: 'email', inputmode: 'email' });
+    const password = h('input', { type: 'password', placeholder: 'Contraseña (mínimo 6 caracteres)', autocomplete: 'current-password' });
+    group.append(
+      h('p', {}, 'Cada uno entra con su correo y una contraseña. La primera vez toca “Crear cuenta”.'),
+      email,
+      h('div', { style: 'height:8px' }),
+      password,
+      h('div', { style: 'height:10px' }),
+      h('button', { class: 'btn btn-primary block', type: 'button', disabled: busy, onclick: () => signIn(email.value, password.value) }, busy ? 'Un momento…' : 'Entrar'),
+      h('button', { class: 'btn btn-secondary block', type: 'button', disabled: busy, onclick: () => signUp(email.value, password.value) }, 'Crear cuenta'));
     return group;
   }
 
@@ -925,23 +918,34 @@ async function withBusy(fn) {
   }
 }
 
-function sendCode(email) {
+function readCredentials(email, password) {
   email = email.trim().toLowerCase();
-  if (!/^\S+@\S+\.\S+$/.test(email)) { toast('Escribe un correo válido'); return; }
+  state.auth.email = email;
+  if (!/^\S+@\S+\.\S+$/.test(email)) { toast('Escribe un correo válido'); return null; }
+  if (password.length < 6) { toast('La contraseña debe tener al menos 6 caracteres'); return null; }
+  return { email, password };
+}
+
+function signIn(email, password) {
+  const cred = readCredentials(email, password);
+  if (!cred) return;
   return withBusy(async () => {
-    await cloud.sendCode(email);
-    state.auth = { ...state.auth, step: 'code', email };
-    toast('Código enviado. Revisa tu correo.');
+    await cloud.signIn(cred.email, cred.password);
+    await adoptCloudCouple();
   });
 }
 
-function verifyCode(code) {
-  code = code.replace(/\D/g, '');
-  if (code.length < 6) { toast('El código tiene 6 dígitos'); return; }
+function signUp(email, password) {
+  const cred = readCredentials(email, password);
+  if (!cred) return;
   return withBusy(async () => {
-    await cloud.verifyCode(state.auth.email, code);
-    state.auth.step = 'email';
-    await adoptCloudCouple();
+    const signedIn = await cloud.signUp(cred.email, cred.password);
+    if (signedIn) {
+      toast('Cuenta creada');
+      await adoptCloudCouple();
+    } else {
+      toast('Te enviamos un enlace de confirmación. Ábrelo y luego vuelve y toca “Entrar”.');
+    }
   });
 }
 
